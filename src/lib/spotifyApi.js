@@ -84,6 +84,9 @@ export function hasSession() {
 
 /* ------------------------------ auth flow -------------------------------- */
 
+// Guard against concurrent/repeated token exchanges (e.g. React StrictMode).
+const exchangingCodes = new Set()
+
 export async function redirectToAuth() {
   if (!isConfigured()) throw new Error('Spotify CLIENT_ID not configured.')
   const verifier = randomString(96)
@@ -101,7 +104,6 @@ export async function redirectToAuth() {
   window.location.assign(`${AUTH_ENDPOINT}?${params.toString()}`)
 }
 
-// Call on app load. If we came back from Spotify with ?code=, exchange it.
 export async function handleRedirectCallback() {
   const url = new URL(window.location.href)
   const code = url.searchParams.get('code')
@@ -112,34 +114,43 @@ export async function handleRedirectCallback() {
     throw new Error(`Spotify authorization failed: ${error}`)
   }
   if (!code) return false
+  if (exchangingCodes.has(code)) return false
 
-  const verifier = localStorage.getItem(LS.verifier)
-  if (!verifier) {
+  exchangingCodes.add(code)
+
+  try {
+    const verifier = localStorage.getItem(LS.verifier)
+    if (!verifier) {
+      cleanUrl()
+      throw new Error('Missing PKCE verifier. Please try connecting again.')
+    }
+
+    const body = new URLSearchParams({
+      client_id: CLIENT_ID,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: REDIRECT_URI,
+      code_verifier: verifier,
+    })
+
+    const res = await fetch(TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    })
     cleanUrl()
-    throw new Error('Missing PKCE verifier. Please try connecting again.')
+    if (!res.ok) {
+      const raw = await res.text().catch(() => '')
+      let description = ''
+      try { description = JSON.parse(raw).error_description || '' } catch {}
+      throw new Error(`Token exchange failed (${res.status}). ${description || raw}`)
+    }
+    saveToken(await res.json())
+    localStorage.removeItem(LS.verifier)
+    return true
+  } finally {
+    exchangingCodes.delete(code)
   }
-
-  const body = new URLSearchParams({
-    client_id: CLIENT_ID,
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: REDIRECT_URI,
-    code_verifier: verifier,
-  })
-
-  const res = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body,
-  })
-  cleanUrl()
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '')
-    throw new Error(`Token exchange failed (${res.status}). ${detail}`)
-  }
-  saveToken(await res.json())
-  localStorage.removeItem(LS.verifier)
-  return true
 }
 
 function cleanUrl() {
