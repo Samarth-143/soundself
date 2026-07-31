@@ -191,6 +191,7 @@ async function api(path, accessToken) {
     headers: { Authorization: `Bearer ${accessToken}` },
   })
   if (res.status === 401) throw new Error('Session expired. Please reconnect Spotify.')
+  if (res.status === 403) throw new Error('Access denied by Spotify. If this app is still in Development mode, only the developer account can use it.')
   if (res.status === 429) throw new Error('Spotify rate limit hit. Try again in a moment.')
   if (!res.ok) throw new Error(`Spotify request failed (${res.status}) for ${path}`)
   return res.json()
